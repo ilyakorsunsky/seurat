@@ -743,37 +743,22 @@ FindConservedMarkers <- function(
 #' DiffExpTest(pbmc_small, cells.1 = WhichCells(object = pbmc_small, ident = 1),
 #'             cells.2 = WhichCells(object = pbmc_small, ident = 2))
 #'
-DiffExpTest <- function(
-  object,
-  cells.1,
-  cells.2,
-  assay.type = "RNA",
-  genes.use = NULL,
-  print.bar = TRUE
-) {
-  data.test <- GetAssayData(object = object,assay.type = assay.type,slot = "data")
-  genes.use <- SetIfNull(x = genes.use, default = rownames(data.test))
-  if (print.bar) {
-    iterate.fxn <- pblapply
-  } else {
-    iterate.fxn <- lapply
+DiffExpTest <- 
+  function(object, cells.1, cells.2, assay.type = "RNA", genes.use = NULL, 
+           print.bar = TRUE) 
+  {
+    data.test <- GetAssayData(object = object, assay.type = assay.type, slot = "data")
+    genes.use <- SetIfNull(x = genes.use, default = rownames(x = data.test)) %>%
+      intersect(rownames(data.test))
+    iterate.fxn <- ifelse(print.bar, pbapply::pbapply, apply)
+    lrtX <- apply(data.test[genes.use, cells.1], 1, bimodLikData)
+    lrtY <- apply(data.test[genes.use, cells.2], 1, bimodLikData)
+    lrtZ <- iterate.fxn(data.test[genes.use, union(cells.1, cells.2)], 1, bimodLikData)
+    lrt_diff <- 2 * (lrtX + lrtY - lrtZ)
+    p_val <- pchisq(lrt_diff, df = 3, lower.tail = F)
+    to.return <- data.frame(p_val, row.names = genes.use)
+    return(to.return)
   }
-  p_val <- unlist(
-    x = iterate.fxn(
-      X = genes.use,
-      FUN = function(x) {
-        return(
-          DifferentialLRT(
-            x = as.numeric(x = data.test[x, cells.1]),
-            y = as.numeric(x = data.test[x, cells.2])
-          )
-        )
-      }
-    )
-  )
-  to.return <- data.frame(p_val, row.names = genes.use)
-  return(to.return)
-}
 
 #' Negative binomial test for UMI-count based data
 #'
@@ -1320,37 +1305,23 @@ DESeq2DETest <- function(
 #' WilcoxDETest(pbmc_small, cells.1 = WhichCells(object = pbmc_small, ident = 1),
 #'             cells.2 = WhichCells(object = pbmc_small, ident = 2))
 #'
-WilcoxDETest <- function(
-  object,
-  cells.1,
-  cells.2,
-  min.cells = 3,
-  genes.use = NULL,
-  print.bar = TRUE,
-  assay.type = "RNA",
-  ...
-) {
-  data.test <- GetAssayData(object = object,assay.type = assay.type,slot = "data")
-  genes.use <- SetIfNull(x = genes.use, default = rownames(x = data.test))
-  # check that the gene made it through the any filtering that was done
-  genes.use <- genes.use[genes.use %in% rownames(x = data.test)]
-  coldata <- object@meta.data[c(cells.1, cells.2), ]
-  coldata[cells.1, "group"] <- "Group1"
-  coldata[cells.2, "group"] <- "Group2"
-  coldata$group <- factor(x = coldata$group)
-  coldata$wellKey <- rownames(x = coldata)
-  countdata.test <- data.test[genes.use, rownames(x = coldata)]
-  mysapply <- if (print.bar) {pbsapply} else {sapply}
-  p_val <- mysapply(
-    X = 1:nrow(x = countdata.test),
-    FUN = function(x) {
-      return(wilcox.test(countdata.test[x, ] ~ coldata$group, ...)$p.value)
-    }
-  )
-  genes.return <- rownames(x = countdata.test)
-  to.return <- data.frame(p_val, row.names = genes.return)
-  return(to.return)
-}
+WilcoxDETest <- 
+  function(object, cells.1, cells.2, min.cells = 3, genes.use = NULL, 
+           print.bar = TRUE, assay.type = "RNA", ...) 
+  {
+    data.test <- GetAssayData(object = object, assay.type = assay.type, 
+                              slot = "data")  
+    genes.use <- SetIfNull(x = genes.use, default = rownames(x = data.test)) %>%
+      intersect(rownames(data.test))
+    iterate.fxn <- ifelse(print.bar, pbapply::pbapply, apply)
+    p_val <- iterate.fxn(data.test[genes.use, c(cells.1, cells.2)], 1, function(data.row) {
+      wilcox.test(head(data.row, length(cells.1)),
+                  tail(data.row, length(cells.2)), ...)$p.value
+    })
+    to.return <- data.frame(p_val, row.names = genes.use)
+    return(to.return)
+  }
+
 
 #' Differential expression testing using Tobit models
 #'
@@ -1419,26 +1390,33 @@ TobitTest <- function(
 #' MarkerTest(pbmc_small, cells.1 = WhichCells(object = pbmc_small, ident = 1),
 #'             cells.2 = WhichCells(object = pbmc_small, ident = 2))
 #'
-MarkerTest <- function(
-  object,
-  cells.1,
-  cells.2,
-  genes.use = NULL,
-  print.bar = TRUE,
-  assay.type = "RNA"
-) {
-  data.test <- GetAssayData(object = object,assay.type = assay.type,slot = "data")
-  genes.use <- SetIfNull(x = genes.use, default = rownames(x = data.test))
-  to.return <- AUCMarkerTest(
-    data1 = data.test[, cells.1],
-    data2 = data.test[, cells.2],
-    mygenes = genes.use,
-    print.bar = print.bar
-  )
-  to.return$power <- abs(x = to.return$myAUC - 0.5) * 2
-  #print(head(to.return))
-  return(to.return)
-}
+MarkerTest <- 
+  function(object, cells.1, cells.2, genes.use = NULL, print.bar = TRUE, 
+           assay.type = "RNA") 
+  {
+    data.test <- GetAssayData(object = object, assay.type = assay.type, 
+                                       slot = "data")
+    genes.use <- SetIfNull(x = genes.use, default = rownames(x = data.test)) %>%
+      intersect(rownames(data.test))
+    iterate.fxn <- ifelse(print.bar, pbapply::pbapply, apply)
+    labels.list <- factor(c(rep(1, length(cells.1)), rep(0, length(cells.2))))
+    
+    myAUC <- iterate.fxn(data.test[genes.use, c(cells.1, cells.2)], 1, function(data.row) {
+      prediction.use <- prediction(predictions = data.row, labels = labels.list,
+                                   label.ordering = 0:1)
+      perf.use <- performance(prediction.obj = prediction.use, measure = "auc")
+      auc.use <- round(x = perf.use@y.values[[1]], digits = 3)
+    })
+    myAUC[is.na(x = myAUC)] <- 0
+    power.vals <- abs(myAUC - 0.5) * 2
+    means.1 <- apply(data.test[genes.use, cells.1], 1, ExpMean)
+    means.2 <- apply(data.test[genes.use, cells.2], 1, ExpMean)
+    avg_diff <- means.1 - means.2
+    
+    to.return <- data.frame(myAUC = myAUC, avg_diff = avg_diff, power = power.vals, row.names = genes.use)
+    to.return <- to.return[rev(x = order(to.return$myAUC)), ]  
+    return(to.return)
+  }
 
 #' Differential expression testing using Student's t-test
 #'
@@ -1460,30 +1438,18 @@ MarkerTest <- function(
 #' pbmc_small
 #' DiffTTest(pbmc_small, cells.1 = WhichCells(object = pbmc_small, ident = 1),
 #'             cells.2 = WhichCells(object = pbmc_small, ident = 2))
-DiffTTest <- function(
-  object,
-  cells.1,
-  cells.2,
-  genes.use = NULL,
-  print.bar = TRUE,
-  assay.type = "RNA"
-) {
-  data.test <- GetAssayData(object = object,assay.type = assay.type,slot = "data")
-  genes.use <- SetIfNull(x = genes.use, default = rownames(x = data.test))
-  # data.use <- object@data
-  if (print.bar) {
-    iterate.fxn=pblapply
-  } else {
-    iterate.fxn <- lapply
+DiffTTest <- 
+  function(object, cells.1, cells.2, genes.use = NULL, print.bar = TRUE, 
+           assay.type = "RNA") 
+  {
+    data.test <- GetAssayData(object = object, assay.type = assay.type, slot = "data")    
+    genes.use <- SetIfNull(x = genes.use, default = rownames(x = data.test)) %>%
+      intersect(rownames(data.test))
+    iterate.fxn <- ifelse(print.bar, pbapply::pbapply, apply)
+    p_val <- iterate.fxn(data.test[genes.use, c(cells.1, cells.2)], 1, function(data.row) {
+      t.test(head(data.row, length(cells.1)),
+             tail(data.row, length(cells.2)))$p.value
+    })
+    to.return <- data.frame(p_val, row.names = genes.use)
+    return(to.return)
   }
-  p_val <- unlist(
-    x = iterate.fxn(
-      X = genes.use,
-      FUN = function(x) {
-        t.test(x = data.test[x, cells.1], y = data.test[x, cells.2])$p.value
-      }
-    )
-  )
-  to.return <- data.frame(p_val,row.names = genes.use)
-  return(to.return)
-}
